@@ -13,21 +13,6 @@
 
 .unified-before-docker:
   script: |
-    if [ ! -z $DOCKER_REGISTRY_PRIVATE_HOST && ! -z $DOCKER_REGISTRY_PRIVATE_USER && ! -z DOCKER_REGISTRY_PRIVATE_TOKEN ]; then
-      docker login ${DOCKER_REGISTRY_PRIVATE_HOST} --username ${DOCKER_REGISTRY_PRIVATE_USER} --password ${DOCKER_REGISTRY_PRIVATE_TOKEN}
-      export DOCKER_REGISTRY_PRIVATE=enabled
-    fi
-
-    if [ ! -z $DOCKER_REGISTRY_PUBLIC_HOST && ! -z $DOCKER_REGISTRY_PUBLIC_USER && ! -z DOCKER_REGISTRY_PUBLIC_TOKEN ]; then
-      docker login ${DOCKER_REGISTRY_PUBLIC_HOST} --username ${DOCKER_REGISTRY_PUBLIC_USER} --password ${DOCKER_REGISTRY_PUBLIC_TOKEN}
-      export DOCKER_REGISTRY_PUBLIC=enabled
-    fi
-    
-    if [ -z $DOCKER_REGISTRY_PRIVATE && -z $DOCKER_REGISTRY_PUBLIC ]; then
-      echo "No Docker registry， skipped workflow"
-      exit 0
-    fi
-
     docker_login() {
       if [ ! -z $DOCKER_REGISTRY_PRIVATE ]; then
         echo "Ready login $DOCKER_REGISTRY_PRIVATE"

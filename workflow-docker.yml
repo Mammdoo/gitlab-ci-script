@@ -1,41 +1,108 @@
 .unified-baking-common:
   script: |
-    docker_build_all() {
-      for i in `ls $CICD_TEMPLATE_PATH`; do
-        if [ -f $CICD_TEMPLATE_PATH/$i/DockerfilePath ]; then
-          DockerfilePath=$(cat $CICD_TEMPLATE_PATH/$i/DockerfilePath)
-        else
-          break
-        fi
-      done
+    isFileExist() {
+      filePath=$1
+      if [ ! -f $filePath ]; then
+        echo "File not Exist: $filepath"
+        return 1
+      fi
+    }
+
+    workflowDockerBuild() {
+      DockerfilePath=$1
+      service_name=$2
+
+      docker_build $DockerfilePath $service_name $CI_COMMIT_SHA
+      docker_push $DOCKER_REGISTRY_PRIVATE_HOST/$DOCKER_REGISTRY_PRIVATE_NAMESPACE $service_name $CI_COMMIT_SHA $CI_COMMIT_SHA
+      
+      if [[ $DOCKER_REGISTRY_PUBLIC == "enabled" ]]; then
+        docker_push $DOCKER_REGISTRY_PUBLIC_HOST/$DOCKER_REGISTRY_PUBLIC_NAMESPACE $service_name $CI_COMMIT_SHA $CI_COMMIT_SHA
+      fi
+
+      docker_rmi $service_name $CI_COMMIT_SHA
+    }
+
+    workflowDockerTag() {
+      $service_name=$1
+
+      docker_pull $DOCKER_REGISTRY_PRIVATE_HOST/$DOCKER_REGISTRY_PRIVATE_NAMESPACE $service_name $CI_COMMIT_SHA
+      docker_push $DOCKER_REGISTRY_PRIVATE_HOST/$DOCKER_REGISTRY_PRIVATE_NAMESPACE $service_name $CI_COMMIT_TAG
+
+      if [[ $DOCKER_REGISTRY_PUBLIC == "enabled" ]]; then
+        docker_push $DOCKER_REGISTRY_PUBLIC_HOST/$DOCKER_REGISTRY_PUBLIC_NAMESPACE $service_name $CI_COMMIT_SHA $CI_COMMIT_TAG
+      fi      
     }
 
 .unified-baking-docker:
   script: |
-    if [ ! -z $DOCKER_REGISTRY_PRIVATE_HOST && ! -z $DOCKER_REGISTRY_PRIVATE_USER && ! -z DOCKER_REGISTRY_PRIVATE_TOKEN ]; then
-      docker login ${DOCKER_REGISTRY_PRIVATE_HOST} --username ${DOCKER_REGISTRY_PRIVATE_USER} --password ${DOCKER_REGISTRY_PRIVATE_TOKEN}
-      export DOCKER_REGISTRY_PRIVATE=enabled
+    if [ -z $DOCKER_REGISTRY_PRIVATE ]; then
+      echo "Pls check Docker private registry env: "
+      echo "  DOCKER_REGISTRY_PRIVATE_HOST"
+      echo "  DOCKER_REGISTRY_PRIVATE_NAMESPACE"
+      echo "  DOCKER_REGISTRY_PRIVATE_USER"
+      echo "  DOCKER_REGISTRY_PRIVATE_TOKEN"
+      exit 1
     fi
 
-    if [ ! -z $DOCKER_REGISTRY_PUBLIC_HOST && ! -z $DOCKER_REGISTRY_PUBLIC_USER && ! -z DOCKER_REGISTRY_PUBLIC_TOKEN ]; then
-      docker login ${DOCKER_REGISTRY_PUBLIC_HOST} --username ${DOCKER_REGISTRY_PUBLIC_USER} --password ${DOCKER_REGISTRY_PUBLIC_TOKEN}
-      export DOCKER_REGISTRY_PUBLIC=enabled
+    docker_login
+
+    set +e  
+    if [ -d $CICD_TEMPLATE_PATH ]; then
+      for i in `ls $CICD_TEMPLATE_PATH`; do
+        service_name=$(fqdn $i)
+        DockerfilePathFile=$CICD_TEMPLATE_PATH/$service_name/DockerfilePath
+        isFileExist $DockerfilePathFile
+        nonZeroReturnThenSkip "$service_name has not $DockerfilePathFile file, skipped"
+        
+        DockerfilePath=$(cat $DockerfilePathFile)
+        isFileExist $DockerfilePath
+        nonZeroReturnThenExit "$service_name missing $DockerfilePath, check file"
+
+        workflowDockerBuild $DockerfilePath $service_name
+      done
     fi
-    
+
+    if [ ! -d $CICD_TEMPLATE_PATH ]; then 
+      service_name=$SERVICE_FQDN
+      isFileExist Dockerfile
+      nonZeroReturnThenExit "$service_name missing Dockerfile, check file"
+      workflowDockerBuild Dockerfile $service_name
+    fi
+
+    set -e
+    docker_logout
+
+.unified-tapping-docker:
+  script: |
     if [ -z $DOCKER_REGISTRY_PRIVATE && -z $DOCKER_REGISTRY_PUBLIC ]; then
       echo "No Docker registry， skipped workflow"
       exit 0
     fi
 
     docker_login
-    
+
+    set +e  
     if [ -d $CICD_TEMPLATE_PATH ]; then
-      docker_build 
-    else
-    
+      for i in `ls $CICD_TEMPLATE_PATH`; do
+        service_name=$(fqdn $i)
+        DockerfilePathFile=$CICD_TEMPLATE_PATH/$service_name/DockerfilePath
+        isFileExist $DockerfilePathFile
+        nonZeroReturnThenSkip "$service_name has not $DockerfilePathFile file, skipped"
+        
+        DockerfilePath=$(cat $DockerfilePathFile)
+        isFileExist $DockerfilePath
+        nonZeroReturnThenSkip "$service_name missing dockerfile $DockerfilePath, skipped"
+
+        workflowDockerTag $service_name
+      done
+    fi
+    set -e
+
+    if [ ! -d $CICD_TEMPLATE_PATH ]; then 
+      service_name=$SERVICE_FQDN
+      isFileExist Dockerfile
+      nonZeroReturnThenExit "$service_name missing Dockerfile, check file"
+      workflowDockerTag $service_name
     fi
 
     docker_logout
-
-.unified-tapping-docker:
-  script: |

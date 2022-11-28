@@ -1,36 +1,79 @@
 .unified-before-base:
   script: |
+    set -e -o pipefail
+    isFileExist() {
+      filePath=$1
+      if [ ! -f $filePath ]; then
+        return 1
+      fi
+    }
+
+    nonZeroReturnThenSkip() {
+      if [[ $? != 0 ]]; then
+          echo "skip message: $1"
+          continue
+      fi
+    }
+
+     nonZeroReturnThenBreak() {
+      if [[ $? != 0 ]]; then
+          echo "break message: $1"
+          break
+      fi
+    }
+
+     nonZeroReturnThenExit() {
+      if [[ $? != 0 ]]; then
+          echo "Exit message: $1"
+          exit 1
+      fi
+    }
+
     fqdn() {
       name=$1
-      docker run -it --rm mammdoo/pipeline-assistant:1.0.1 python3 convertFQDN.py $name
+      docker run -it --rm mammdoo/pipeline-assistant:1.1.1 python3 convertFQDN.py $name
     }
-    export SERVICE_FQDN=$(fqdn $CI_PROJECT_NAME)
     
     if [ -z $CICD_TEMPLATE_PATH ]; then
       export CICD_TEMPLATE_PATH=.gitlab-ci/svc
     fi
 
+    if [ -z $CLUSTER_TARGET ]; then
+      export CLUSTER_TARGET=$(docker run -it --rm mammdoo/pipeline-assistant:1.1.1 python3 getCluster.py github $CI_COMMIT_REF_NAME )
+    fi
+
+    export SERVICE_FQDN=$(fqdn $CI_PROJECT_NAME)
 
 .unified-before-docker:
   script: |
-    docker_login() {
-      if [ ! -z $DOCKER_REGISTRY_PRIVATE ]; then
-        echo "Ready login $DOCKER_REGISTRY_PRIVATE"
-        docker login ${DOCKER_REGISTRY_PRIVATE_HOST} --username ${DOCKER_REGISTRY_PRIVATE_USER} --password ${DOCKER_REGISTRY_PRIVATE_TOKEN}
-      fi
+    if [ ! -z $DOCKER_REGISTRY_PRIVATE_HOST && ! -z $DOCKER_REGISTRY_PRIVATE_NAMESPACE && ! -z $DOCKER_REGISTRY_PRIVATE_USER && ! -z $DOCKER_REGISTRY_PRIVATE_TOKEN ]; then
+      export DOCKER_REGISTRY_PRIVATE=enabled
+    fi
 
-      if [ ! -z $DOCKER_REGISTRY_PUBLIC ]; then
+    if [ -z $DOCKER_REGISTRY_PUBLIC_STATUS ]; then
+      export DOCKER_REGISTRY_PUBLIC_STATUS=$(docker run -it --rm mammdoo/pipeline-assistant:1.1.1 python3 getPublicRegistryStatus.py github $CI_COMMIT_REF_NAME )
+    fi
+
+    if [ ! -z $DOCKER_REGISTRY_PUBLIC_HOST && ! -z $DOCKER_REGISTRY_PUBLIC_NAMESPACE ! -z $DOCKER_REGISTRY_PUBLIC_USER && ! -z $DOCKER_REGISTRY_PUBLIC_TOKEN ]; then
+      if [[ $DOCKER_REGISTRY_PUBLIC_STATUS == "enabled" ]]; then
+        export DOCKER_REGISTRY_PUBLIC=enabled
+      fi
+    fi
+
+    docker_login() {
+      echo "Ready login $DOCKER_REGISTRY_PRIVATE"
+      docker login ${DOCKER_REGISTRY_PRIVATE_HOST} --username ${DOCKER_REGISTRY_PRIVATE_USER} --password ${DOCKER_REGISTRY_PRIVATE_TOKEN}
+
+      if [[ $DOCKER_REGISTRY_PUBLIC == "enabled" ]]; then
         echo "Ready login $DOCKER_REGISTRY_PUBLIC"
         docker login ${DOCKER_REGISTRY_PUBLIC_HOST} --username ${DOCKER_REGISTRY_PUBLIC_USER} --password ${DOCKER_REGISTRY_PUBLIC_TOKEN}
       fi
     }
 
     docker_logout() {
-      if [ ! -z $DOCKER_REGISTRY_PRIVATE ]; then
-        docker logout ${DOCKER_REGISTRY_PRIVATE_HOST}
-      fi
+      docker logout ${DOCKER_REGISTRY_PRIVATE_HOST}
 
-      if [ ! -z $DOCKER_REGISTRY_PUBLIC ]; then
+      if [[ $DOCKER_REGISTRY_PUBLIC == "enabled" ]]; then
         docker logout ${DOCKER_REGISTRY_PUBLIC_HOST}
       fi
     }
@@ -41,7 +84,7 @@
       SERVICE_COMMITID=$3
 
       docker_args=""
-      for arg in `printenv | grep DOCKER_BUILD_ARGS | awk -F '=' '{print $1}'`; do
+      for arg in `printenv | grep DOCKER_BUILD_ARGS_ | awk -F '=' '{print $1}'`; do
         arg_name=$(echo $arg | sed 's|DOCKER_BUILD_ARGS_||g') 
         docker_args="${docker_args}--build-arg ${arg_name}=${!arg} "
       done

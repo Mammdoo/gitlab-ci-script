@@ -42,7 +42,13 @@
       export CLUSTER_TARGET=$(docker run -it --rm mammdoo/pipeline-assistant:1.1.1 python3 getCluster.py github $CI_COMMIT_REF_NAME )
     fi
 
-    export SERVICE_FQDN=$(fqdn $CI_PROJECT_NAME)
+    if [ -z $CI_COMMIT_TAG ]; then
+      export MAMMDOO_SERVICE_VERSION=$CI_COMMIT_SHA
+    else
+      export MAMMDOO_SERVICE_VERSION=$CI_COMMIT_TAG
+    fi
+
+    export MAMMDOO_SERVICE_FQDN=$(fqdn $CI_PROJECT_NAME)
 
 .unified-before-docker:
   script: |
@@ -81,7 +87,6 @@
     docker_build() {
       DockerfilePath=$1
       SERVICE_NAME=$2
-      SERVICE_COMMITID=$3
 
       docker_args=""
       for arg in `printenv | grep DOCKER_BUILD_ARGS_ | awk -F '=' '{print $1}'`; do
@@ -89,101 +94,80 @@
         docker_args="${docker_args}--build-arg ${arg_name}=${!arg} "
       done
 
-      docker_build_cmdline="docker build -f $DockerfilePath $docker_args -t registry.local/$SERVICE_NAME:$SERVICE_COMMITID ."
+      docker_build_cmdline="docker build -f $DockerfilePath $docker_args -t registry.local/$SERVICE_NAME:$CI_COMMIT_SHA ."
       $docker_build_cmdline
     }
 
     docker_pull() {
       REGISTRY_URL=$1
       SERVICE_NAME=$2
-      SERVICE_COMMITID=$3
 
       set +e
       for i in $(seq 1 90)
       do
-          docker pull $REGISTRY_URL/$SERVICE_NAME:$SERVICE_COMMITID
-          if [[ $? -ne 0 ]]; then
+        docker pull $REGISTRY_URL/$SERVICE_NAME:$CI_COMMIT_SHA
+        if [[ $? -ne 0 ]]; then
           pull_state="fail"
-          echo "正在等待${SERVICE_COMMITID}的首次构建完成，tag流程不执行构建流程，仅基于commit的镜像做别名"
+          echo "COMMIT SHA $$CI_COMMIT_SHA} pipeline has not finished , waiting for a moment."
           sleep 10
-          else
+        else
           pull_state="success"
           break
-          fi
+        fi
       done
 
       set -e
       if [[ "$pull_state" == "fail" ]]; then
-          echo "本次tag对应的commitid尚未完成构建，需要等$3所对应的pipeline完成Baking后，retry本任务即可"
+          echo "This workflow failed because ${CI_COMMIT_SHA} image lost, tag only pulling ${CI_COMMIT_SHA} image and docker tag image, pls make sure commit pipeline has success "
           exit 1
       fi
 
-      docker tag $REGISTRY_URL/$SERVICE_NAME:$SERVICE_COMMITID registry.local/$SERVICE_NAME:$SERVICE_COMMITID
-      docker rmi $REGISTRY_URL/$SERVICE_NAME:$SERVICE_COMMITID
+      docker tag $REGISTRY_URL/$SERVICE_NAME:$CI_COMMIT_SHA registry.local/$SERVICE_NAME:$CI_COMMIT_SHA
+      docker rmi $REGISTRY_URL/$SERVICE_NAME:$CI_COMMIT_SHA
     }
 
     docker_push() {
       REGISTRY_URL=$1
       SERVICE_NAME=$2
-      SERVICE_COMMITID=$3
-      SERVICE_VERSION=$4
 
-      docker tag registry.local/$SERVICE_NAME:$SERVICE_COMMITID $REGISTRY_URL/$SERVICE_NAME:$SERVICE_VERSION
-      docker push $REGISTRY_URL/$SERVICE_NAME:$SERVICE_VERSION
-      docker rmi $REGISTRY_URL/$SERVICE_NAME:$SERVICE_VERSION
+      docker tag registry.local/$SERVICE_NAME:$CI_COMMIT_SHA $REGISTRY_URL/$SERVICE_NAME:$MAMDOO_SERVICE_VERSION
+      docker push $REGISTRY_URL/$SERVICE_NAME:$MAMDOO_SERVICE_VERSION
+      docker rmi $REGISTRY_URL/$SERVICE_NAME:$MAMDOO_SERVICE_VERSION
     }
 
     docker_rmi() {
       SERVICE_NAME=$1
-      SERVICE_COMMITID=$2
+    $CI_COMMIT_SHA=$2
 
-      docker rmi registry.local/$SERVICE_NAME:$SERVICE_COMMITID
+      docker rmi registry.local/$SERVICE_NAME:$CI_COMMIT_SHA
     }
 
 .unified-before-upload:
   script: |
-    rename_to_jinja() {
-      jinja_file_dir=$1
-      jinja_file_name=$2
-      jinja_file_path=${jinja_file_dir}/${jinja_file_name}
-      if [ -f $jinja_file_path ]; then
-        filename=$(echo $jinja_file_name | awk -F '.' '{print $1}')
-        mv $jinja_file_path ${jinja_file_dir}/${filename}.j2
+    if [ ! -z $PACKAGE_REGISTRY_GITLAB_URL && ! -z $PACKAGE_REGISTRY_GITLAB_TOKEN ]; then
+      export PACKAGE_REGISTRY_GITLAB=enabled
+    fi
+
+    rename_jinja_to_yml() {
+      file_dir=$1
+      file=$2
+
+      file_type=$(echo $file_name | awk -F '.' '{print $NF}')
+      file_name=${echo $file_name | sed 's|.[^.]*$||g'}
+      
+      if [[ $file_type == "j2" ]]; then
+        mv $file_dir/$file $file_dir/$file_name.yml
       fi
     }
 
-    gitlab_package_registry_upload() {
-      FILE_PATH=$1
-      PACKAGE_REGISTRY_URL=$2
-      PACKAGE_REGISTRY_TOKEN=$3
+    package_registry_upload() {
+      PACKAGE_REGISTRY_URL=$1
+      PACKAGE_REGISTRY_TOKEN=$2
+      FILE_PATH=$3
 
       curl --header "PRIVATE-TOKEN: $PACKAGE_REGISTRY_TOKEN" --upload-file $FILE_PATH $PACKAGE_REGISTRY_URL
-    
     }
 
-    gitlab_package_registry_url() {
-      PACKAGE_REGISTRY_HOST=$1
-      PACKAGE_REGISTRY_NS_TYPE=$2
-      PACKAGE_REGISTRY_NS_TYPE_ID=$3
-      PACKAGE_REGISTRY_SERVICE_TYPE=$4
-      PAKCAGE_REGISTRY_SERVICE_PATH=$5
-
-      package_registry_url="https://${PACKAGE_REGISTRY_HOST}/api/v4/${PACKAGE_REGISTRY_NS_TYPE}/${PACKAGE_REGISTRY_NS_TYPE_ID}/packages/${PACKAGE_REGISTRY_SERVICE_TYPE}/${PAKCAGE_REGISTRY_SERVICE_PATH}"
-      echo $package_registry_url
-    }
-
-    upload_gitlab_package_registry() {
-      SERVICE_VERSION=$2
-      
-      rename_jinja_to_yml $k8s_template_filepath
-
-      if [ -z $PACKAGE_REGISTRY_HOST || $PACKAGE_REGISTRY_GROUP_ID ]; then
-        echo "Missing package registry url, skipped workflow"
-        exit 0
-      fi
-
-    }
-    
     upload_k8s_templates_to_gitlab_package_registry() {
       K8S_TEMPLATE_FILEPATH=$1
       SERVICE_VERSION=$2

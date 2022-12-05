@@ -1,0 +1,33 @@
+.unified-upload-common:
+  script: |
+    upload_k8s_templates() {
+      service_dir
+
+      for i in `ls $upload_dir`; do
+        rename_jinja_to_yml $upload_dir $i
+      done
+
+      for i in `ls $upload_dir`; do
+        package_registry_upload $PACKAGE_REGISTRY_URL/$SERVICE_NAME/$SERVICE_VERSION
+      done
+    }
+
+.unified-upload-gitlab:
+  script: |
+    if [[ $PACKAGE_REGISTRY_GITLAB != "enabled" ]]; then
+      echo "Pls check gitlab package registry env: "
+      echo "  DOCKER_REGISTRY_PRIVATE_HOST"
+      echo "  DOCKER_REGISTRY_PRIVATE_NAMESPACE"
+      echo "  DOCKER_REGISTRY_PRIVATE_USER"
+      echo "  DOCKER_REGISTRY_PRIVATE_TOKEN"
+      exit 0
+    fi
+  
+    if [ -d $CICD_TEMPLATE_PATH ]; then
+      for i in `ls $CICD_TEMPLATE_PATH`; do
+        service_name=$(fqdn $i)
+        upload_dir=$CICD_TEMPLATE_PATH/$service_name/k8s
+        upload_k8s_template
+
+      done 
+    fi
